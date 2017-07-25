@@ -9,7 +9,7 @@ SUFFIX=""
 
 cd $(dirname $0)/../package
 
-TAG=${TAG:-${VERSION}${SUFFIX}}
+TAG=${TAG:-${IMAGE_VERSION}${SUFFIX}}
 REPO=${REPO:-rancher}
 
 cp ../bin/network-healthcheck .
