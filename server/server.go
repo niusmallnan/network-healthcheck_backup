@@ -57,7 +57,6 @@ func (p *Peer) pingCheck() {
 }
 
 func (p *Peer) arpingCheck() {
-	arping.SetTimeout(commonTimeout)
 	result := map[string]bool{}
 	for i := 1; i <= pingCount; i++ {
 		logrus.Debugf("Do an arping check to %s, %d/%d", p.DestIP, i, pingCount)
@@ -70,6 +69,7 @@ func (p *Peer) arpingCheck() {
 			result[hwAddr.String()] = true
 		}
 		logrus.Debugf("Received an arping reply from %s, mac: %s, %d/%d", p.DestIP, hwAddr.String(), i, pingCount)
+		time.Sleep(commonTimeout)
 	}
 	if len(result) > 1 {
 		logrus.Warnf("Get multiple MAC from %s", p.DestIP)
