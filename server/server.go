@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/j-keck/arping"
 	"github.com/pkg/errors"
 	"github.com/rancher/go-rancher-metadata/metadata"
 	fastping "github.com/tatsushid/go-fastping"
@@ -15,7 +16,7 @@ import (
 const (
 	pingCount     = 5
 	checkInterval = 10 * time.Second
-	pingMaxRTT    = time.Second
+	commonTimeout = time.Second
 )
 
 type Peer struct {
@@ -27,16 +28,16 @@ type Peer struct {
 }
 
 func (p *Peer) pingCheck() {
-	result := map[string]int{}
+	receivedCount := 0
 	for i := 1; i <= pingCount; i++ {
 		ping := fastping.NewPinger()
 		ping.Network("ip")
 		ping.AddIP(p.DestIP)
-		ping.MaxRTT = pingMaxRTT
+		ping.MaxRTT = commonTimeout
 		ping.OnRecv = func(ip *net.IPAddr, d time.Duration) {
 			if ip.String() == p.DestIP {
-				logrus.Debugf("Received a ping check from %s, %d/%d", p.DestIP, i, pingCount)
-				result[p.DestIP] = result[p.DestIP] + 1
+				logrus.Debugf("Received a ping reply from %s, %d/%d", p.DestIP, i, pingCount)
+				receivedCount++
 			}
 		}
 		logrus.Debugf("Do a ping check to %s, %d/%d", p.DestIP, i, pingCount)
@@ -45,8 +46,29 @@ func (p *Peer) pingCheck() {
 			logrus.Errorf("Failed to ping %s, %v", p.DestIP, err)
 		}
 	}
-	if result[p.DestIP] < pingCount {
+	if receivedCount < pingCount {
 		logrus.Warnf("Lose ping data from %s", p.DestIP)
+		p.Reachable = false
+	}
+}
+
+func (p *Peer) arpingCheck() {
+	arping.SetTimeout(commonTimeout)
+	result := map[string]bool{}
+	for i := 1; i <= pingCount; i++ {
+		logrus.Debugf("Do an arping check to %s, %d/%d", p.DestIP, i, pingCount)
+		hwAddr, _, err := arping.Ping(net.ParseIP(p.DestIP))
+		if err != nil {
+			logrus.Errorf("Failed to arping %s, %v", p.DestIP, err)
+			continue
+		}
+		if hwAddr.String() != "" {
+			result[hwAddr.String()] = true
+		}
+		logrus.Debugf("Received an arping reply from %s, mac: %s, %d/%d", p.DestIP, hwAddr.String(), i, pingCount)
+	}
+	if len(result) > 1 {
+		logrus.Warnf("Get multiple MAC from %s", p.DestIP)
 		p.Reachable = false
 	}
 }
@@ -56,6 +78,7 @@ func (p *Peer) httpCheck() {
 		logrus.Debugf("Do a http check for %s", p.DestIP)
 		resp, err := http.Get(fmt.Sprintf("http://%s:8111/ping", p.DestIP))
 		if err != nil || resp.StatusCode != http.StatusOK {
+			logrus.Warnf("Router container %s is unreachable", p.DestIP)
 			p.Reachable = false
 		}
 		defer resp.Body.Close()
@@ -130,9 +153,8 @@ func (s *Server) checkPeers(existContainers map[string]bool) {
 	for destIP, p := range s.peers {
 		if _, ok := existContainers[destIP]; ok {
 			p.pingCheck()
-			if p.IsRouter {
-				p.httpCheck()
-			}
+			p.arpingCheck()
+			p.httpCheck()
 		} else {
 			legacyContainers[destIP] = true
 		}
