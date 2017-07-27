@@ -153,21 +153,16 @@ func (s *Server) calculatePeers() (map[string]bool, error) {
 }
 
 func (s *Server) checkPeers(existContainers map[string]bool) {
-	legacyContainers := map[string]bool{}
 	for destIP, p := range s.peers {
-		if _, ok := existContainers[destIP]; ok {
-			p.pingCheck()
-			p.arpingCheck()
-			if routerHTTPCheck {
-				p.httpCheck()
-			}
-		} else {
-			legacyContainers[destIP] = true
+		if _, ok := existContainers[destIP]; !ok {
+			delete(s.peers, destIP)
+			continue
 		}
-	}
-
-	for destIP := range legacyContainers {
-		delete(s.peers, destIP)
+		p.pingCheck()
+		p.arpingCheck()
+		if routerHTTPCheck {
+			p.httpCheck()
+		}
 	}
 }
 
