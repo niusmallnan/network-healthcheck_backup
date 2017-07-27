@@ -2,19 +2,20 @@ package server
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/pkg/errors"
 	"github.com/rancher/go-rancher-metadata/metadata"
-	ping "github.com/sparrc/go-ping"
+	fastping "github.com/tatsushid/go-fastping"
 )
 
 const (
 	pingCount     = 5
-	checkInterval = 30 * time.Second
-	pingTimeout   = 10 * time.Second
+	checkInterval = 10 * time.Second
+	pingMaxRTT    = time.Second
 )
 
 type Peer struct {
@@ -26,22 +27,28 @@ type Peer struct {
 }
 
 func (p *Peer) pingCheck() {
-	logrus.Debugf("Do a ping check for %s", p.DestIP)
-	pinger, err := ping.NewPinger(p.DestIP)
-	if err != nil {
-		logrus.Error(errors.Wrap(err, "Failed to NewPinger"))
-		p.Reachable = false
-	}
-	pinger.SetPrivileged(true)
-	pinger.Count = pingCount
-	pinger.Timeout = pingTimeout
-	pinger.OnFinish = func(stats *ping.Statistics) {
-		logrus.Debugf("Finish a ping check for %s", p.DestIP)
-		if stats.PacketLoss > 0 {
-			p.Reachable = false
+	result := map[string]int{}
+	for i := 1; i <= pingCount; i++ {
+		ping := fastping.NewPinger()
+		ping.Network("ip")
+		ping.AddIP(p.DestIP)
+		ping.MaxRTT = pingMaxRTT
+		ping.OnRecv = func(ip *net.IPAddr, d time.Duration) {
+			if ip.String() == p.DestIP {
+				logrus.Debugf("Received a ping check from %s, %d/%d", p.DestIP, i, pingCount)
+				result[p.DestIP] = result[p.DestIP] + 1
+			}
+		}
+		logrus.Debugf("Do a ping check to %s, %d/%d", p.DestIP, i, pingCount)
+		err := ping.Run()
+		if err != nil {
+			logrus.Errorf("Failed to ping %s, %v", p.DestIP, err)
 		}
 	}
-	pinger.Run()
+	if result[p.DestIP] < pingCount {
+		logrus.Warnf("Lose ping data from %s", p.DestIP)
+		p.Reachable = false
+	}
 }
 
 func (p *Peer) httpCheck() {
@@ -51,7 +58,7 @@ func (p *Peer) httpCheck() {
 		if err != nil || resp.StatusCode != http.StatusOK {
 			p.Reachable = false
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
 		logrus.Debugf("Finish a http check for %s", p.DestIP)
 	}
 }
