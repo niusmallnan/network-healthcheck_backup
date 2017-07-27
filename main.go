@@ -39,18 +39,21 @@ func run(c *cli.Context) error {
 	if os.Getenv("RANCHER_DEBUG") == "true" {
 		logrus.SetLevel(logrus.DebugLevel)
 	}
+	if os.Getenv("ROUTER_HTTP_CHECK") == "true" {
+		server.EnableRouterHTTPCheck()
+	}
 
 	mdClient, err := metadata.NewClientAndWait(fmt.Sprintf("http://%s/2016-07-29", c.String("metadata-address")))
-	server := server.NewServer(mdClient)
+	s := server.NewServer(mdClient)
 
 	exit := make(chan error)
 	go func(exit chan<- error) {
-		err := server.Run()
+		err := s.Run()
 		exit <- errors.Wrap(err, "Main server exited")
 	}(exit)
 
 	go func(exit chan<- error) {
-		err := healthcheck.StartHealthCheck(c.Int("health-check-port"), server, mdClient)
+		err := healthcheck.StartHealthCheck(c.Int("health-check-port"), s, mdClient)
 		exit <- errors.Wrapf(err, "Healthcheck provider died.")
 	}(exit)
 

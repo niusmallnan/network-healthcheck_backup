@@ -19,6 +19,10 @@ const (
 	commonTimeout = time.Second
 )
 
+var (
+	routerHTTPCheck = false
+)
+
 type Peer struct {
 	UUID      string
 	SourceIP  string
@@ -154,7 +158,9 @@ func (s *Server) checkPeers(existContainers map[string]bool) {
 		if _, ok := existContainers[destIP]; ok {
 			p.pingCheck()
 			p.arpingCheck()
-			p.httpCheck()
+			if routerHTTPCheck {
+				p.httpCheck()
+			}
 		} else {
 			legacyContainers[destIP] = true
 		}
@@ -167,4 +173,8 @@ func (s *Server) checkPeers(existContainers map[string]bool) {
 
 func (s *Server) GetPeers() map[string]*Peer {
 	return s.peers
+}
+
+func EnableRouterHTTPCheck() {
+	routerHTTPCheck = true
 }
