@@ -9,7 +9,7 @@ import (
 	"github.com/rancher/go-rancher-metadata/metadata"
 )
 
-func StartHealthCheck(listen int, server *server.Server, mc metadata.Client) error {
+func StartHealthCheck(listen int, s *server.Server, mc metadata.Client) error {
 	http.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
 		healthy := true
 		_, err := mc.GetVersion()
@@ -18,7 +18,8 @@ func StartHealthCheck(listen int, server *server.Server, mc metadata.Client) err
 			logrus.Error("Metadata and dns is unreachable")
 		}
 
-		for _, p := range server.GetPeers() {
+		for _, val := range s.GetPeers().Items() {
+			p := val.(*server.Peer)
 			if !p.Reachable {
 				healthy = false
 				logrus.Errorf("From %s to %s is unreachable, isRouter: %t, UUID: %s", p.SourceIP, p.DestIP, p.IsRouter, p.UUID)

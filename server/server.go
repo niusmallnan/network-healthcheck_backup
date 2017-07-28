@@ -8,6 +8,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/j-keck/arping"
+	cmap "github.com/orcaman/concurrent-map"
 	"github.com/pkg/errors"
 	"github.com/rancher/go-rancher-metadata/metadata"
 	fastping "github.com/tatsushid/go-fastping"
@@ -53,6 +54,8 @@ func (p *Peer) pingCheck() {
 	if receivedCount < pingCount {
 		logrus.Warnf("Lose ping data from %s", p.DestIP)
 		p.Reachable = false
+	} else {
+		p.Reachable = true
 	}
 }
 
@@ -74,6 +77,8 @@ func (p *Peer) arpingCheck() {
 	if len(result) > 1 {
 		logrus.Warnf("Get multiple MAC from %s", p.DestIP)
 		p.Reachable = false
+	} else {
+		p.Reachable = true
 	}
 }
 
@@ -84,30 +89,80 @@ func (p *Peer) httpCheck() {
 		if err != nil || resp.StatusCode != http.StatusOK {
 			logrus.Warnf("Router container %s is unreachable", p.DestIP)
 			p.Reachable = false
+		} else {
+			p.Reachable = true
 		}
-		defer resp.Body.Close()
+		if resp != nil {
+			resp.Body.Close()
+		}
 		logrus.Debugf("Finish a http check for %s", p.DestIP)
 	}
 }
 
 type Server struct {
-	mc    metadata.Client
-	peers map[string]*Peer
+	mc               metadata.Client
+	peers            cmap.ConcurrentMap
+	unreachablePeers cmap.ConcurrentMap
 }
 
 func NewServer(mc metadata.Client) *Server {
-	return &Server{mc, map[string]*Peer{}}
+	return &Server{
+		mc:               mc,
+		peers:            cmap.New(),
+		unreachablePeers: cmap.New(),
+	}
 }
 
-func (s *Server) Run() error {
+func (s *Server) RunLoop() error {
 	for {
+		logrus.Debugf("Start main loop checking...")
 		existContainers, err := s.calculatePeers()
 		if err != nil {
 			return err
 		}
 		s.checkPeers(existContainers)
-		logrus.Debugf("Sleep checking...wait...")
+		logrus.Debugf("Sleep main loop checking...wait...")
 		time.Sleep(checkInterval)
+	}
+}
+
+func (s *Server) RunRetryLoop() error {
+	for {
+		time.Sleep(checkInterval)
+		logrus.Debugf("Start retry loop checking...")
+		items := s.unreachablePeers.Items()
+		if len(items) == 0 {
+			logrus.Debugf("Nothing to do in retry loop...")
+			continue
+		}
+
+		containersMap := make(map[string]bool)
+		containers, err := s.mc.GetContainers()
+		if err != nil {
+			return errors.Wrap(err, "Failed to get containers")
+		}
+		for _, c := range containers {
+			containersMap[c.UUID] = true
+		}
+
+		for destIP, val := range items {
+			p := val.(*Peer)
+			if _, ok := containersMap[p.UUID]; !ok {
+				s.peers.Remove(destIP)
+				s.unreachablePeers.Remove(destIP)
+				continue
+			}
+			p.pingCheck()
+			p.arpingCheck()
+			if routerHTTPCheck {
+				p.httpCheck()
+			}
+
+			if p.Reachable {
+				s.unreachablePeers.Remove(destIP)
+			}
+		}
+		logrus.Debugf("Sleep retry loop checking...wait...")
 	}
 }
 
@@ -139,13 +194,15 @@ func (s *Server) calculatePeers() (map[string]bool, error) {
 			continue
 		}
 
-		s.peers[c.PrimaryIp] = &Peer{
+		p := &Peer{
 			UUID:      c.UUID,
 			SourceIP:  self.PrimaryIp,
 			DestIP:    c.PrimaryIp,
 			Reachable: true,
 			IsRouter:  isRouter,
 		}
+		s.peers.Set(c.PrimaryIp, p)
+
 		existContainers[c.PrimaryIp] = true
 	}
 
@@ -153,20 +210,25 @@ func (s *Server) calculatePeers() (map[string]bool, error) {
 }
 
 func (s *Server) checkPeers(existContainers map[string]bool) {
-	for destIP, p := range s.peers {
+	for destIP, val := range s.peers.Items() {
 		if _, ok := existContainers[destIP]; !ok {
-			delete(s.peers, destIP)
+			s.peers.Remove(destIP)
 			continue
 		}
+		p := val.(*Peer)
 		p.pingCheck()
 		p.arpingCheck()
 		if routerHTTPCheck {
 			p.httpCheck()
 		}
+
+		if !p.Reachable {
+			s.unreachablePeers.Set(destIP, p)
+		}
 	}
 }
 
-func (s *Server) GetPeers() map[string]*Peer {
+func (s *Server) GetPeers() cmap.ConcurrentMap {
 	return s.peers
 }
 

@@ -48,8 +48,13 @@ func run(c *cli.Context) error {
 
 	exit := make(chan error)
 	go func(exit chan<- error) {
-		err := s.Run()
-		exit <- errors.Wrap(err, "Main server exited")
+		err := s.RunLoop()
+		exit <- errors.Wrap(err, "Main loop exited")
+	}(exit)
+
+	go func(exit chan<- error) {
+		err := s.RunRetryLoop()
+		exit <- errors.Wrap(err, "Retry loop exited")
 	}(exit)
 
 	go func(exit chan<- error) {
