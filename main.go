@@ -22,9 +22,10 @@ func main() {
 	app.Action = run
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
-			Name:  "metadata-address",
-			Usage: "The metadata service address",
-			Value: "rancher-metadata",
+			Name:   "metadata-ip",
+			Usage:  "The metadata service address",
+			Value:  "169.254.169.250",
+			EnvVar: "RANCHER_METADATA_IP",
 		},
 		cli.IntFlag{
 			Name:  "health-check-port",
@@ -43,7 +44,7 @@ func run(c *cli.Context) error {
 		server.EnableRouterHTTPCheck()
 	}
 
-	mdClient, err := metadata.NewClientAndWait(fmt.Sprintf("http://%s/2016-07-29", c.String("metadata-address")))
+	mdClient, err := metadata.NewClientAndWait(fmt.Sprintf("http://%s/2016-07-29", c.String("metadata-ip")))
 	s := server.NewServer(mdClient)
 
 	exit := make(chan error)
