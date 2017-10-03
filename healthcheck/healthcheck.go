@@ -18,14 +18,15 @@ func StartHealthCheck(listen int, s *server.Server, mc metadata.Client) error {
 			logrus.Error("Metadata and dns is unreachable")
 		}
 
-		for _, val := range s.GetPeers().Items() {
-			p := val.(*server.Peer)
+		s.GetPeers().Range(func(_, v interface{}) bool {
+			p := v.(*server.Peer)
 			if !p.Reachable {
 				healthy = false
 				logrus.Errorf("From %s to %s is unreachable, isRouter: %t, UUID: %s", p.SourceIP, p.DestIP, p.IsRouter, p.UUID)
-				break
+				return false
 			}
-		}
+			return true
+		})
 
 		if healthy {
 			fmt.Fprint(w, "ok")

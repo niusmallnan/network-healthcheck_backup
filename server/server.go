@@ -8,10 +8,10 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/j-keck/arping"
-	cmap "github.com/orcaman/concurrent-map"
 	"github.com/pkg/errors"
 	"github.com/rancher/go-rancher-metadata/metadata"
 	fastping "github.com/tatsushid/go-fastping"
+	"golang.org/x/sync/syncmap"
 )
 
 const (
@@ -101,15 +101,15 @@ func (p *Peer) httpCheck() {
 
 type Server struct {
 	mc               metadata.Client
-	peers            cmap.ConcurrentMap
-	unreachablePeers cmap.ConcurrentMap
+	peers            *syncmap.Map
+	unreachablePeers *syncmap.Map
 }
 
 func NewServer(mc metadata.Client) *Server {
 	return &Server{
 		mc:               mc,
-		peers:            cmap.New(),
-		unreachablePeers: cmap.New(),
+		peers:            new(syncmap.Map),
+		unreachablePeers: new(syncmap.Map),
 	}
 }
 
@@ -130,8 +130,7 @@ func (s *Server) RunRetryLoop() error {
 	for {
 		time.Sleep(checkInterval)
 		logrus.Debugf("Start retry loop checking...")
-		items := s.unreachablePeers.Items()
-		if len(items) == 0 {
+		if getSyncMapLength(s.unreachablePeers) == 0 {
 			logrus.Debugf("Nothing to do in retry loop...")
 			continue
 		}
@@ -145,12 +144,13 @@ func (s *Server) RunRetryLoop() error {
 			containersMap[c.UUID] = true
 		}
 
-		for destIP, val := range items {
-			p := val.(*Peer)
+		s.unreachablePeers.Range(func(k, v interface{}) bool {
+			destIP := k.(string)
+			p := v.(*Peer)
 			if _, ok := containersMap[p.UUID]; !ok {
-				s.peers.Remove(destIP)
-				s.unreachablePeers.Remove(destIP)
-				continue
+				s.peers.Delete(destIP)
+				s.unreachablePeers.Delete(destIP)
+				return true
 			}
 			p.pingCheck()
 			p.arpingCheck()
@@ -159,9 +159,11 @@ func (s *Server) RunRetryLoop() error {
 			}
 
 			if p.Reachable {
-				s.unreachablePeers.Remove(destIP)
+				s.unreachablePeers.Delete(destIP)
 			}
-		}
+
+			return true
+		})
 		logrus.Debugf("Sleep retry loop checking...wait...")
 	}
 }
@@ -201,7 +203,7 @@ func (s *Server) calculatePeers() (map[string]bool, error) {
 			Reachable: true,
 			IsRouter:  isRouter,
 		}
-		s.peers.Set(c.PrimaryIp, p)
+		s.peers.Store(c.PrimaryIp, p)
 
 		existContainers[c.PrimaryIp] = true
 	}
@@ -210,12 +212,13 @@ func (s *Server) calculatePeers() (map[string]bool, error) {
 }
 
 func (s *Server) checkPeers(existContainers map[string]bool) {
-	for destIP, val := range s.peers.Items() {
+	s.peers.Range(func(k, v interface{}) bool {
+		destIP := k.(string)
 		if _, ok := existContainers[destIP]; !ok {
-			s.peers.Remove(destIP)
-			continue
+			s.peers.Delete(destIP)
+			return true
 		}
-		p := val.(*Peer)
+		p := v.(*Peer)
 		p.pingCheck()
 		p.arpingCheck()
 		if routerHTTPCheck {
@@ -223,12 +226,14 @@ func (s *Server) checkPeers(existContainers map[string]bool) {
 		}
 
 		if !p.Reachable {
-			s.unreachablePeers.Set(destIP, p)
+			s.unreachablePeers.Store(destIP, p)
 		}
-	}
+
+		return true
+	})
 }
 
-func (s *Server) GetPeers() cmap.ConcurrentMap {
+func (s *Server) GetPeers() *syncmap.Map {
 	return s.peers
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/pkg/errors"
 	"github.com/rancher/go-rancher-metadata/metadata"
+	"golang.org/x/sync/syncmap"
 )
 
 func getRoutersInfo(mc metadata.Client) (map[string]metadata.Network, map[string]metadata.Container, error) {
@@ -50,4 +51,14 @@ func getRoutersInfo(mc metadata.Client) (map[string]metadata.Network, map[string
 	}
 
 	return ret, routers, nil
+}
+
+func getSyncMapLength(m *syncmap.Map) int {
+	// https://github.com/golang/go/issues/20680
+	length := 0
+	m.Range(func(_, _ interface{}) bool {
+		length++
+		return true
+	})
+	return length
 }
